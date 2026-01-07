@@ -1,6 +1,7 @@
 #[allow(unused_imports)]
 use std::net::TcpListener;
 use std::{
+    collections::HashMap,
     fs,
     io::{Read, Write},
     net::TcpStream,
@@ -37,6 +38,14 @@ pub fn handle_function(mut stream: TcpStream) {
     let method = parts.next().unwrap();
     let path = parts.next().unwrap();
 
+    if path == "/user-agent" {
+        let header = parse_headers(request_str);
+
+        if let Some(ua) = header.get("User-Agent") {
+            println!("User-Agent: {}", ua)
+        }
+    };
+
     let (status, file) = if method == "GET" && path == "/" {
         ("HTTP/1.1 200 OK", "200.html")
     } else {
@@ -72,4 +81,19 @@ pub fn handle_function(mut stream: TcpStream) {
     stream.write_all(&response.as_bytes()).unwrap();
     stream.write_all(&echo_response.as_bytes()).unwrap();
     stream.flush().unwrap()
+}
+
+fn parse_headers(request: &str) -> HashMap<&str, &str> {
+    let mut header = HashMap::new();
+
+    for line in request.lines().skip(1) {
+        if line.is_empty() {
+            break;
+        }
+
+        if let Some((key, value)) = line.split_once(": ") {
+            header.insert(key, value);
+        }
+    }
+    header
 }
