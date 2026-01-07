@@ -1,6 +1,7 @@
 #[allow(unused_imports)]
 use std::net::TcpListener;
 use std::{
+    fs,
     io::{Read, Write},
     net::TcpStream,
 };
@@ -36,17 +37,39 @@ pub fn handle_function(mut stream: TcpStream) {
     let method = parts.next().unwrap();
     let path = parts.next().unwrap();
 
-    let status = if method == "GET" && path == "/" {
-        "HTTP/1.1 200 OK\r\n\r\n"
+    let (status, file) = if method == "GET" && path == "/" {
+        ("HTTP/1.1 200 OK", "200.html")
     } else {
-        "HTTP/1.1 404 Not Found\r\n\r\n"
+        ("HTTP/1.1 404 Not Found", "404.html")
     };
 
+    // extract the url path /echo/
+    let echo_response = if let Some(echo_str) = path.strip_prefix("/echo/") {
+        let len = echo_str.len();
+        format!(
+            "HTTP/1.1 200 OK\r\n\
+            Content-Type: text/plain\r\n\
+            Content-Length: {}\r\n\r\n\
+            {}",
+            len, echo_str
+        )
+    } else {
+        "HTTP/1.1 404 Not Found\r\n\r\n".to_string()
+    };
+
+    println!("{}", file);
     println!("Request Sent: {}", request_str);
 
-    let response = format!("{}\r\n", status);
-
-    println!("{}", response);
+    // send the files through the stream like html
+    let content = fs::read_to_string(file).unwrap();
+    let response = format!(
+        "{}\r\n Content-length: {}\r\n\r\n {}\r\n",
+        status,
+        content.len(),
+        content
+    );
 
     stream.write_all(&response.as_bytes()).unwrap();
+    stream.write_all(&echo_response.as_bytes()).unwrap();
+    stream.flush().unwrap()
 }
