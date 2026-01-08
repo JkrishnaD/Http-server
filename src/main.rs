@@ -5,6 +5,7 @@ use std::{
     fs,
     io::{Read, Write},
     net::TcpStream,
+    thread,
 };
 
 fn main() {
@@ -14,7 +15,7 @@ fn main() {
         match stream {
             Ok(stream) => {
                 println!("accepted new connection: {:?}", stream);
-                handle_function(stream);
+                thread::spawn(|| handle_function(stream));
             }
             Err(e) => {
                 println!("error: {}", e);
@@ -26,48 +27,91 @@ fn main() {
 pub fn handle_function(mut stream: TcpStream) {
     let mut buffer = [0; 1024];
 
-    let n = stream.read(&mut buffer).unwrap();
+    let n = match stream.read(&mut buffer) {
+        Ok(n) => n,
+        Err(_) => return,
+    };
 
-    let request = &buffer[..n];
+    let request = match str::from_utf8(&buffer[..n]) {
+        Ok(request) => request,
+        Err(_) => return,
+    };
 
-    let request_str = str::from_utf8(request).unwrap();
-
-    let request_line = request_str.lines().next().unwrap();
+    let request_line = match request.lines().next() {
+        Some(lines) => lines,
+        None => return,
+    };
 
     let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap();
-    let path = parts.next().unwrap();
+    let method = parts.next().unwrap_or("");
+    let path = parts.next().unwrap_or("");
 
+    // if endpoint is /user-agent then send the User-Agent headers to the client
     if path == "/user-agent" {
-        let header = parse_headers(request_str);
+        let header = parse_headers(request);
 
         if let Some(ua) = header.get("User-Agent") {
-            println!("User-Agent: {}", ua)
+            let res = format!(
+                "HTTP/1.1 200 OK\r\n\
+            Content-Type: text/html\r\n\
+            Content-Length: {}\r\n\r\n\
+            {}",
+                ua.len(),
+                ua
+            );
+            println!("User-Agent: {}", ua);
+            stream.write_all(&res.as_bytes()).unwrap();
+        } else {
+            let res = format!("HTTP/1.1 404 NOT FOUND");
+            stream.write_all(&res.as_bytes()).unwrap()
+        };
+
+        return;
+    }
+
+    // if path is "/files/directory" then send the directory file to the client from tmp
+    if let Some(file) = path.strip_prefix("/files/") {
+        let file_path = format!("tmp/{}", file);
+
+        match fs::read(file_path) {
+            Ok(bytes) => {
+                let res = format!(
+                    "HTTP/1.1 200 OK\r\n Content-Type: application/octet-stream\r\n Content-lenght:{}\r\n {}",
+                    bytes.len(),
+                    String::from_utf8(bytes).unwrap()
+                );
+                println!("{}", res);
+
+                stream.write_all(&res.as_bytes()).unwrap();
+                return;
+            }
+            Err(_) => {
+                let res = format!("HTTP/1.1 404 NOT FOUND");
+                stream.write_all(&res.as_bytes()).unwrap();
+                return;
+            }
         }
-    };
+    }
+
+    // extract the url path /echo/
+    if let Some(echo_str) = path.strip_prefix("/echo/") {
+        let len = echo_str.len();
+        let res = format!(
+            "HTTP/1.1 200 OK\r\n\
+            Content-Type: text/plain\r\n\
+            Content-Length: {}\r\n\r\n\
+            {}",
+            len, echo_str
+        );
+        stream.write_all(&res.as_bytes()).unwrap();
+        return;
+    }
 
     let (status, file) = if method == "GET" && path == "/" {
         ("HTTP/1.1 200 OK", "200.html")
     } else {
         ("HTTP/1.1 404 Not Found", "404.html")
     };
-
-    // extract the url path /echo/
-    let echo_response = if let Some(echo_str) = path.strip_prefix("/echo/") {
-        let len = echo_str.len();
-        format!(
-            "HTTP/1.1 200 OK\r\n\
-            Content-Type: text/plain\r\n\
-            Content-Length: {}\r\n\r\n\
-            {}",
-            len, echo_str
-        )
-    } else {
-        "HTTP/1.1 404 Not Found\r\n\r\n".to_string()
-    };
-
-    println!("{}", file);
-    println!("Request Sent: {}", request_str);
 
     // send the files through the stream like html
     let content = fs::read_to_string(file).unwrap();
@@ -79,7 +123,6 @@ pub fn handle_function(mut stream: TcpStream) {
     );
 
     stream.write_all(&response.as_bytes()).unwrap();
-    stream.write_all(&echo_response.as_bytes()).unwrap();
     stream.flush().unwrap()
 }
 
